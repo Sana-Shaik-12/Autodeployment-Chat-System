@@ -36,7 +36,7 @@ class AutodeploymentCLI:
             deployment_data = response.json()
             deployment_id = deployment_data["deployment_id"]
             
-            logger.info(f"✅ Deployment initiated with ID: {deployment_id}")
+            logger.info(f" Deployment initiated with ID: {deployment_id}")
             
             if follow:
                 return self.follow_deployment(deployment_id)
@@ -81,13 +81,13 @@ class AutodeploymentCLI:
                 
                 if current_status == "completed":
                     if "deployment_url" in status_data:
-                        logger.info(f"🎉 Deployment completed! Application available at: {status_data['deployment_url']}")
+                        logger.info(f" Deployment completed! Application available at: {status_data['deployment_url']}")
                     else:
-                        logger.info("🎉 Deployment completed successfully!")
+                        logger.info(" Deployment completed successfully!")
                     return True
                 
                 elif current_status == "failed":
-                    logger.error("❌ Deployment failed!")
+                    logger.error(" Deployment failed!")
                     if "error" in status_data:
                         logger.error(f"Error: {status_data['error']}")
                     return False
@@ -116,7 +116,7 @@ class AutodeploymentCLI:
             
             status_data = response.json()
             
-            print(f"\n📊 Deployment Status: {deployment_id}")
+            print(f"\n Deployment Status: {deployment_id}")
             print(f"Status: {status_data['status']}")
             print(f"Message: {status_data.get('message', 'N/A')}")
             
@@ -155,7 +155,7 @@ class AutodeploymentCLI:
             logs_data = response.json()
             logs = logs_data["logs"]
             
-            print(f"\n📝 Deployment Logs: {deployment_id}")
+            print(f"\n Deployment Logs: {deployment_id}")
             print("-" * 80)
             
             # Show last N log entries
@@ -184,7 +184,7 @@ class AutodeploymentCLI:
             
             if response.status_code == 200:
                 data = response.json()
-                print(f"✅ API is healthy")
+                print(f" API is healthy")
                 print(f"Version: {data.get('version', 'unknown')}")
                 print(f"Available endpoints: {', '.join(data.get('endpoints', {}).keys())}")
                 return True
