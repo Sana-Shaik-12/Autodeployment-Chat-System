@@ -329,4 +329,234 @@ class RepositoryAnalyzer:
         """Detect environment variables used by the application"""
         env_vars = set()
         env_patterns = [
-            r'os\.environ
+            r'os\.environ\.get\(["\']([^"\']+)["\']',
+            r'os\.environ\[["\']([^"\']+)["\']\]',
+            r'process\.env\.([A-Z_]+)',
+            r'System\.getenv\(["\']([^"\']+)["\']',
+            r'\$\{([A-Z_]+)\}',
+            r'env\.[A-Z_]+',
+        ]
+        
+        # Check for .env files
+        env_file = os.path.join(repo_path, '.env')
+        if os.path.exists(env_file):
+            try:
+                with open(env_file, 'r') as f:
+                    for line in f:
+                        if '=' in line and not line.strip().startswith('#'):
+                            var_name = line.split('=')[0].strip()
+                            env_vars.add(var_name)
+            except Exception:
+                pass
+        
+        # Check source code for environment variable usage
+        for root, dirs, files in os.walk(repo_path):
+            dirs[:] = [d for d in dirs if not d.startswith('.')]
+            for file in files:
+                if file.endswith(('.py', '.js', '.ts', '.java', '.yml', '.yaml')):
+                    try:
+                        with open(os.path.join(root, file), 'r', encoding='utf-8', errors='ignore') as f:
+                            content = f.read()
+                            for pattern in env_patterns:
+                                matches = re.findall(pattern, content, re.IGNORECASE)
+                                env_vars.update(matches)
+                    except Exception:
+                        continue
+        
+        return list(env_vars)
+    
+    def _detect_required_services(self, repo_path: str, analysis: Dict) -> List[str]:
+        """Detect required external services (databases, caches, etc.)"""
+        services = set()
+        
+        # Check dependencies for database/service indicators
+        dependencies = analysis.get('dependencies', {})
+        
+        # Database detection patterns
+        db_patterns = {
+            'postgresql': ['psycopg2', 'postgresql', 'pg'],
+            'mysql': ['mysql', 'pymysql', 'mysql2'],
+            'mongodb': ['pymongo', 'mongodb', 'mongoose'],
+            'redis': ['redis', 'redis-py', 'ioredis'],
+            'sqlite': ['sqlite3', 'sqlite'],
+            'elasticsearch': ['elasticsearch'],
+        }
+        
+        for service, patterns in db_patterns.items():
+            for dep_file, deps in dependencies.items():
+                if isinstance(deps, list):
+                    dep_text = ' '.join(deps).lower()
+                elif isinstance(deps, dict):
+                    dep_text = ' '.join(deps.keys()).lower()
+                else:
+                    continue
+                
+                for pattern in patterns:
+                    if pattern in dep_text:
+                        services.add(service)
+        
+        # Check for docker-compose services
+        compose_file = os.path.join(repo_path, 'docker-compose.yml')
+        if os.path.exists(compose_file):
+            try:
+                with open(compose_file, 'r') as f:
+                    content = f.read().lower()
+                    for service in db_patterns.keys():
+                        if service in content:
+                            services.add(service)
+            except Exception:
+                pass
+        
+        return list(services)
+    
+    def _generate_start_commands(self, repo_path: str, analysis: Dict) -> List[str]:
+        """Generate appropriate start commands based on analysis"""
+        commands = []
+        language = analysis.get('language')
+        framework = analysis.get('framework')
+        entry_points = analysis.get('entry_points', [])
+        
+        if language == 'python':
+            if framework == 'flask':
+                if 'app.py' in entry_points:
+                    commands.append('python app.py')
+                elif 'main.py' in entry_points:
+                    commands.append('python main.py')
+                else:
+                    commands.append('flask run --host=0.0.0.0')
+            elif framework == 'django':
+                commands.append('python manage.py runserver 0.0.0.0:8000')
+            elif framework == 'fastapi':
+                if 'main.py' in entry_points:
+                    commands.append('uvicorn main:app --host 0.0.0.0 --port 8000')
+                else:
+                    commands.append('uvicorn app:app --host 0.0.0.0 --port 8000')
+            elif framework == 'streamlit':
+                if 'app.py' in entry_points:
+                    commands.append('streamlit run app.py --server.port 8501 --server.address 0.0.0.0')
+            else:
+                # Generic Python app
+                if entry_points:
+                    commands.append(f'python {entry_points[0]}')
+        
+        elif language == 'nodejs':
+            package_json = os.path.join(repo_path, 'package.json')
+            if os.path.exists(package_json):
+                try:
+                    with open(package_json, 'r') as f:
+                        package_data = json.load(f)
+                        scripts = package_data.get('scripts', {})
+                        
+                        if 'start' in scripts:
+                            commands.append('npm start')
+                        elif 'dev' in scripts:
+                            commands.append('npm run dev')
+                        elif 'main' in package_data:
+                            commands.append(f'node {package_data["main"]}')
+                except Exception:
+                    pass
+            
+            if not commands and entry_points:
+                commands.append(f'node {entry_points[0]}')
+        
+        elif language == 'java':
+            if framework == 'spring':
+                commands.append('java -jar target/*.jar')
+            else:
+                commands.append('java -cp target/classes com.example.Main')
+        
+        # Fallback commands
+        if not commands:
+            if language == 'python':
+                commands.append('python main.py')
+            elif language == 'nodejs':
+                commands.append('node index.js')
+        
+        return commands
+    
+    def _generate_build_commands(self, repo_path: str, analysis: Dict) -> List[str]:
+        """Generate build commands based on project type"""
+        commands = []
+        language = analysis.get('language')
+        
+        if language == 'python':
+            commands.append('pip install -r requirements.txt')
+        elif language == 'nodejs':
+            if os.path.exists(os.path.join(repo_path, 'package-lock.json')):
+                commands.append('npm ci')
+            else:
+                commands.append('npm install')
+        elif language == 'java':
+            if os.path.exists(os.path.join(repo_path, 'pom.xml')):
+                commands.append('mvn clean package -DskipTests')
+            elif os.path.exists(os.path.join(repo_path, 'build.gradle')):
+                commands.append('./gradlew build -x test')
+        
+        return commands
+    
+    def _estimate_resources(self, analysis: Dict) -> Tuple[str, str]:
+        """Estimate memory and CPU requirements"""
+        language = analysis.get('language')
+        framework = analysis.get('framework')
+        services = analysis.get('required_services', [])
+        
+        # Base requirements by language
+        base_memory = {
+            'python': '512Mi',
+            'nodejs': '256Mi',
+            'java': '1Gi'
+        }
+        
+        base_cpu = {
+            'python': '0.5',
+            'nodejs': '0.25',
+            'java': '0.5'
+        }
+        
+        memory = base_memory.get(language, '512Mi')
+        cpu = base_cpu.get(language, '0.5')
+        
+        # Adjust for framework
+        if framework in ['django', 'spring']:
+            memory = '1Gi'
+            cpu = '1'
+        elif framework in ['fastapi', 'express']:
+            memory = '512Mi'
+            cpu = '0.5'
+        
+        # Adjust for services
+        if len(services) > 2:
+            memory = '1Gi'
+            cpu = '1'
+        
+        return memory, cpu
+    
+    def _calculate_confidence(self, analysis: Dict) -> float:
+        """Calculate confidence score for the analysis"""
+        confidence = 0.0
+        
+        # Language detection confidence
+        if analysis.get('language') != 'unknown':
+            confidence += 0.3
+        
+        # Framework detection confidence
+        if analysis.get('framework'):
+            confidence += 0.2
+        
+        # Dependencies found
+        if analysis.get('dependencies'):
+            confidence += 0.2
+        
+        # Entry points found
+        if analysis.get('entry_points'):
+            confidence += 0.15
+        
+        # Port detected
+        if analysis.get('port'):
+            confidence += 0.1
+        
+        # Commands generated
+        if analysis.get('start_commands'):
+            confidence += 0.05
+        
+        return min(confidence, 1.0)
